@@ -1,6 +1,14 @@
 import asyncio
 import zendriver as zd
+import logging
 
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 num_pages = 5
 
@@ -9,6 +17,7 @@ async def get_page_cids(url, max_retries=3):
     """
     Opens its OWN browser instance to avoid ConcurrencyErrors.
     """
+    logger.info(f"Starting browser for: {url}")
     browser = await zd.start(headless=True)
 
     try:
@@ -18,14 +27,15 @@ async def get_page_cids(url, max_retries=3):
 
                 try:
                     await page.wait_for_idle()
-                except:
+                except Exception:
+                    logger.debug(f"Idle wait timed out for {url}, proceeding anyway.")
                     await asyncio.sleep(2)
 
                 await page.wait_for(".VkpGBb", timeout=10)
                 cards = await page.query_selector_all(".VkpGBb")
 
                 if len(cards) < 5:
-                    raise ValueError(f"Only found {len(cards)} results. Retrying...")
+                    raise ValueError(f"Low result count ({len(cards)})")
 
                 page_data = []
                 for card in cards:
@@ -37,17 +47,22 @@ async def get_page_cids(url, max_retries=3):
                         if cid:
                             page_data.append({"name": name, "cid": cid})
 
-                print(f"Successfully scraped {len(page_data)} CIDs from {url}")
+                logger.info(f"Successfully scraped {len(page_data)} CIDs from {url}")
                 return page_data
 
             except Exception as e:
-                print(f"Attempt {attempt} failed for {url}: {e}")
+                # Log as a soft error (warning)
+                logger.warning(f"Attempt {attempt}/{max_retries} failed for {url}: {e}")
                 if attempt == max_retries:
+                    logger.error(
+                        f"Failed to scrape {url} after {max_retries} attempts."
+                    )
                     return []
                 await asyncio.sleep(3)
         return []
     finally:
         await browser.stop()
+        logger.debug(f"Browser closed for {url}")
 
 
 async def main():
@@ -55,12 +70,12 @@ async def main():
     Main orchestrator.
     """
     semaphore = asyncio.Semaphore(2)
-
     base_url = "https://www.google.com/search?tbm=lcl&q=spa+in+new+york&hl=en"
 
-    # Generate URLs based on the dynamic num_pages input
     urls = [f"{base_url}&start={i * 20}" for i in range(num_pages)]
-    print(f"Prepared {len(urls)} URLs to scrape. URLs: {urls}")
+    logger.info(
+        f"Initialization complete. Preparing to scrape {len(urls)} pages with concurrency of 2."
+    )
 
     async def sem_task(url):
         async with semaphore:
@@ -81,17 +96,20 @@ async def main():
                 unique_list.append(entry)
                 seen_cids.add(entry["cid"])
 
-        print("\n--- Final Results ---")
+        logger.info("Scraping finished. Processing results...")
+
+        print("\n" + "=" * 30)
+        print("        FINAL RESULTS")
+        print("=" * 30)
         for entry in unique_list:
             print(f"{entry['name']}: {entry['cid']}")
 
-        print(f"\nTotal unique CIDs collected: {len(unique_list)}")
+        logger.info(f"Collection complete. Total unique CIDs: {len(unique_list)}")
         return unique_list
 
     except Exception as e:
-        print(f"Global error: {e}")
+        logger.critical(f"Global execution error: {e}")
 
 
 if __name__ == "__main__":
-    # CHANGE THIS NUMBER TO CONTROL THE PAGES
     asyncio.run(main())
